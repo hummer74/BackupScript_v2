@@ -49,6 +49,7 @@ if (-not $latestWeekly) {
 }
 
 $destFile = Join-Path $MonthlyPath $latestWeekly.Name
+$copySuccess = $true
 
 if (-not (Test-Path $destFile)) {
     try {
@@ -56,24 +57,30 @@ if (-not (Test-Path $destFile)) {
         Log "Monthly copy created: $destFile" "SUCCESS"
     } catch {
         Add-Error "Failed to copy monthly archive: $_"
+        $copySuccess = $false
     }
 } else {
     Log "Monthly copy for $($latestWeekly.Name) already exists. Skipping." "INFO"
 }
 
-$monthlyFiles = Get-ChildItem -Path $MonthlyPath -Filter "*.7z" | Sort-Object LastWriteTime -Descending
-$toDelete = $monthlyFiles | Select-Object -Skip $MonthsToKeep
-if ($toDelete) {
-    Log "Deleting $($toDelete.Count) old monthly archive(s):" "INFO"
-    foreach ($file in $toDelete) {
-        try {
-            Remove-Item -Path $file.FullName -Force -ErrorAction Stop
-            Log "  Removed: $($file.FullName)" "INFO"
-        } catch {
-            Add-Error "Failed to delete $($file.FullName): $_"
+if ($copySuccess) {
+    $monthlyFiles = Get-ChildItem -Path $MonthlyPath -Filter "*.7z" | Sort-Object LastWriteTime -Descending
+    $toDelete = $monthlyFiles | Select-Object -Skip $MonthsToKeep
+    if ($toDelete) {
+        Log "Deleting $($toDelete.Count) old monthly archive(s):" "INFO"
+        foreach ($file in $toDelete) {
+            try {
+                Remove-Item -Path $file.FullName -Force -ErrorAction Stop
+                Log "  Removed: $($file.FullName)" "INFO"
+            } catch {
+                Add-Error "Failed to delete $($file.FullName): $_"
+            }
         }
     }
+} else {
+    Log "Skipping deletion of old archives due to copy failure." "WARNING"
 }
+
 Log "Monthly rotation completed." "SUCCESS"
 
 if ($script:Errors.Count -gt 0) {

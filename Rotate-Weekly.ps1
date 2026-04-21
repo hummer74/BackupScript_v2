@@ -49,6 +49,7 @@ if (-not $latestDaily) {
 }
 
 $destFile = Join-Path $WeeklyPath $latestDaily.Name
+$copySuccess = $true
 
 if (-not (Test-Path $destFile)) {
     try {
@@ -56,24 +57,31 @@ if (-not (Test-Path $destFile)) {
         Log "Weekly copy created: $destFile" "SUCCESS"
     } catch {
         Add-Error "Failed to copy weekly archive: $_"
+        $copySuccess = $false
     }
 } else {
     Log "Weekly copy for $($latestDaily.Name) already exists. Skipping." "INFO"
 }
 
-$weeklyFiles = Get-ChildItem -Path $WeeklyPath -Filter "*.7z" | Sort-Object LastWriteTime -Descending
-$toDelete = $weeklyFiles | Select-Object -Skip $WeeksToKeep
-if ($toDelete) {
-    Log "Deleting $($toDelete.Count) old weekly archive(s):" "INFO"
-    foreach ($file in $toDelete) {
-        try {
-            Remove-Item -Path $file.FullName -Force -ErrorAction Stop
-            Log "  Removed: $($file.FullName)" "INFO"
-        } catch {
-            Add-Error "Failed to delete $($file.FullName): $_"
+# Only perform deletion if copy was successful (or skipped because already exists)
+if ($copySuccess) {
+    $weeklyFiles = Get-ChildItem -Path $WeeklyPath -Filter "*.7z" | Sort-Object LastWriteTime -Descending
+    $toDelete = $weeklyFiles | Select-Object -Skip $WeeksToKeep
+    if ($toDelete) {
+        Log "Deleting $($toDelete.Count) old weekly archive(s):" "INFO"
+        foreach ($file in $toDelete) {
+            try {
+                Remove-Item -Path $file.FullName -Force -ErrorAction Stop
+                Log "  Removed: $($file.FullName)" "INFO"
+            } catch {
+                Add-Error "Failed to delete $($file.FullName): $_"
+            }
         }
     }
+} else {
+    Log "Skipping deletion of old archives due to copy failure." "WARNING"
 }
+
 Log "Weekly rotation completed." "SUCCESS"
 
 if ($script:Errors.Count -gt 0) {

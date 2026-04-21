@@ -63,13 +63,18 @@ function Test-DiskSpace {
 }
 
 function Wait-VMState {
-    param([string]$VMName, [string]$TargetState, [int]$TimeoutSeconds = 60)
+    param(
+        [string]$VMName,
+        [string]$TargetState,
+        [int]$TimeoutSeconds = 60,
+        [int]$CheckIntervalSeconds = 2
+    )
     $elapsed = 0
     while ($elapsed -lt $TimeoutSeconds) {
         $state = (Get-VM -Name $VMName).State
         if ($state -eq $TargetState) { return $true }
-        Start-Sleep -Seconds 2
-        $elapsed += 2
+        Start-Sleep -Seconds $CheckIntervalSeconds
+        $elapsed += $CheckIntervalSeconds
     }
     return $false
 }
@@ -133,6 +138,18 @@ if ($earlyExit) {
     exit 1
 }
 
+# Cleanup temporary root before export
+if (Test-Path $TempRoot) {
+    try {
+        Log "Cleaning up temporary root directory: $TempRoot" "INFO"
+        Get-ChildItem -Path $TempRoot -Recurse -Force | Remove-Item -Recurse -Force -ErrorAction Stop
+        Log "Temporary root cleaned successfully." "SUCCESS"
+    }
+    catch {
+        Log "Warning: Could not fully clean temporary root. Continuing anyway. Error: $_" "WARNING"
+    }
+}
+
 # --- Phase 2: Execution Block ---
 $WasRunning = ($VM.State -eq 'Running')
 
@@ -161,8 +178,9 @@ try {
     if ($WasRunning) {
         Log "Starting VM '$VMName'..."
         Start-VM -Name $VMName
-        if (-not (Wait-VMState -VMName $VMName -TargetState 'Running' -TimeoutSeconds 60)) {
-            Log "VM failed to reach 'Running' state within 60s. Manual check required." "ERROR"
+        # Increased timeout to 5 minutes with 15-second check interval
+        if (-not (Wait-VMState -VMName $VMName -TargetState 'Running' -TimeoutSeconds 300 -CheckIntervalSeconds 15)) {
+            Log "VM failed to reach 'Running' state within 300s. Manual check required." "ERROR"
             $script:Errors += "VM '$VMName' failed to restart after export."
         } else {
             Log "VM is running." "SUCCESS"
@@ -177,33 +195,70 @@ try {
     }
     Log "Archive created: $ArchiveFileName" "SUCCESS"
 
-    # Step 5: Daily Rotation (Only if archive creation was successful)
-    Log "Performing rotation (Keep: $DaysToKeep copies)..."
-    $files = Get-ChildItem -Path $DailyPath -Filter "*.7z" | Sort-Object LastWriteTime -Descending
-    $toDelete = $files | Select-Object -Skip $DaysToKeep
-    if ($toDelete) {
-        foreach ($file in $toDelete) {
+    # Step 4b: Verify archive integrity
+    Log "Verifying archive integrity..."
+    & $SevenZipPath t "$ArchiveFileName" -bsp1
+    if ($LASTEXITCODE -ne 0) {
+        throw "Archive integrity check failed with exit code $LASTEXITCODE. Archive may be corrupted."
+    }
+    Log "Archive integrity verified successfully." "SUCCESS"
+
+    # Step 5: Remove temporary export folder (only after successful verification)
+    if (Test-Path $TempExportFolder) {
+        Log "Removing temporary export folder..."
+        Remove-Item -Path $TempExportFolder -Recurse -Force
+        Log "Temporary folder removed." "SUCCESS"
+    }
+
+    # Step 6: Daily Rotation (Keep archives from the last $DaysToKeep calendar days based on filename date)
+    Log "Performing rotation (Keep archives from the last $DaysToKeep days)..."
+    $cutoffDate = (Get-Date).Date.AddDays(-$DaysToKeep)
+    $allFiles = Get-ChildItem -Path $DailyPath -Filter "*.7z"
+    $oldFiles = @()
+
+    foreach ($file in $allFiles) {
+        # Extract date from filename pattern: VMName-YYYY-MM-DD_HH-MM.7z
+        if ($file.Name -match '(\d{4}-\d{2}-\d{2})_\d{2}-\d{2}\.7z$') {
+            try {
+                $fileDate = [datetime]::ParseExact($matches[1], 'yyyy-MM-dd', [System.Globalization.CultureInfo]::InvariantCulture)
+                if ($fileDate -lt $cutoffDate) {
+                    $oldFiles += $file
+                }
+            }
+            catch {
+                Log "  WARNING: Could not parse date from filename '$($file.Name)'. Using LastWriteTime as fallback." "WARNING"
+                if ($file.LastWriteTime -lt $cutoffDate) {
+                    $oldFiles += $file
+                }
+            }
+        }
+        else {
+            Log "  WARNING: Filename '$($file.Name)' does not match expected pattern. Using LastWriteTime as fallback." "WARNING"
+            if ($file.LastWriteTime -lt $cutoffDate) {
+                $oldFiles += $file
+            }
+        }
+    }
+
+    if ($oldFiles.Count -gt 0) {
+        foreach ($file in $oldFiles) {
             try {
                 Remove-Item -Path $file.FullName -Force -ErrorAction Stop
-                Log "  Deleted old archive: $($file.Name)"
+                Log "  Deleted old archive (older than $DaysToKeep days): $($file.Name)"
             } catch {
                 Add-Error "Failed to delete old archive $($file.Name): $_"
             }
         }
     } else {
-        Log "No old archives found for rotation."
+        Log "No archives older than $DaysToKeep days found."
     }
 }
 catch {
     Add-Error "Process failed: $_"
+    # Temporary folder is intentionally left for troubleshooting
+    Log "Temporary export folder preserved at $TempExportFolder for manual inspection." "WARNING"
 }
 finally {
-    # Step 6: Cleanup Temp Data
-    if (Test-Path $TempExportFolder) {
-        Log "Removing temporary export folder..."
-        Remove-Item -Path $TempExportFolder -Recurse -Force
-    }
-
     # Final safety: Ensure VM is running if it was running initially
     if ($WasRunning) {
         $currentState = (Get-VM -Name $VMName).State

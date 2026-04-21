@@ -50,7 +50,7 @@
   <Actions Context="Author">
     <Exec>
       <Command>powershell.exe</Command>
-      <Arguments>-File "C:\Script\Backup-HyperV.ps1" -NoProfile -ExecutionPolicy Bypass</Arguments>
+      <Arguments>-NoProfile -ExecutionPolicy Bypass -File "C:\Script\Backup-HyperV.ps1"</Arguments>
     </Exec>
   </Actions>
 </Task>

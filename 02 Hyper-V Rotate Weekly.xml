@@ -46,7 +46,7 @@
   <Actions Context="Author">
     <Exec>
       <Command>powershell.exe</Command>
-      <Arguments>-File "C:\Script\Rotate-Weekly.ps1" -NoProfile -ExecutionPolicy Bypass</Arguments>
+      <Arguments>-NoProfile -ExecutionPolicy Bypass -File "C:\Script\Rotate-Weekly.ps1"</Arguments>
     </Exec>
   </Actions>
 </Task>
